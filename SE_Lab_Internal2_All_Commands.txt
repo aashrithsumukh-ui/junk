@@ -1,0 +1,1336 @@
+================================================================================
+SE LAB INTERNAL 2: ALL COMMANDS, SCRIPTS AND FILE CONTENTS
+================================================================================
+Plain text reference. Commands are indented by 4 spaces. Each command has a
+one-line note above it saying what it does.
+Sections are ordered easiest to hardest.
+
+
+========================================
+QUICK REFERENCE
+========================================
+
+PORT MAP (use these ports, they are the ones that were free during practice)
+    Jenkins ....................... 8081   http://localhost:8081
+    Tomcat ........................ 8085   http://localhost:8085
+    Nagios (host port -> 80) ...... 8888   http://localhost:8888
+    kubectl port-forward .......... 8091   http://localhost:8091
+    nginx on EC2 (host -> 80) ..... 6060   http://<ec2-public-ip>:6060
+    Docker Compose nginx .......... 8080   http://localhost:8080
+    Docker Compose Flask .......... 5000   http://localhost:5000
+
+PREREQUISITES CHECKLIST (do these BEFORE anything else)
+    [ ] 1. Open the Docker Desktop application and wait until the bottom left
+           says "Engine running". Nothing docker related works before this.
+    [ ] 2. Start minikube if the question is Kubernetes:
+               minikube start --driver=docker
+    [ ] 3. ngrok must be on PATH if the question is webhooks. Test with:
+               ngrok version
+           If that fails, cd into the ngrok folder and run ngrok.exe instead.
+    [ ] 4. Jenkins reachable at http://localhost:8081
+    [ ] 5. Tomcat reachable at http://localhost:8085 with a manager user.
+    [ ] 6. Logged in to Docker Hub if the question needs a push:
+               docker login
+    [ ] 7. Git Bash open (not CMD) for all the /c/... style paths below.
+
+SECTION INDEX
+    SECTION 1: DOCKER SINGLE CONTAINERIZATION
+    SECTION 2: DOCKER COMPOSE MULTI CONTAINER
+    SECTION 3: NAGIOS MONITORING IN DOCKER
+    SECTION 4: KUBERNETES WITH MINIKUBE
+    SECTION 5: AWS EC2 DEPLOYMENT
+    SECTION 6: JENKINS SCRIPTED PIPELINE
+    SECTION 7: JENKINS FREESTYLE JOBS AND BUILD PIPELINE VIEW
+    SECTION 8: JENKINS WEBHOOKS AND EMAIL NOTIFICATION
+    COMMON ERRORS AND FIXES
+    MAVEN -f FLAG
+
+
+========================================
+SECTION 1: DOCKER SINGLE CONTAINERIZATION
+========================================
+
+----------------------------------------
+PART A: Docker CLI with Redis
+----------------------------------------
+
+STEP 1. Download the Redis image from Docker Hub to the local machine.
+
+    docker pull redis
+
+STEP 2. Start a Redis container in the background, named my-redis.
+
+    docker run --name my-redis -d redis
+
+STEP 3. List the containers that are currently running.
+
+    docker ps
+
+STEP 4. Open an interactive Redis command line inside the running container.
+        Note: the word docker appears ONCE. Typing it twice causes the
+        "unknown shorthand flag: 'i' in -it" error.
+
+    docker exec -it my-redis redis-cli
+
+STEP 5. Inside the redis-cli prompt, store a key, read it back, then leave.
+        These are Redis commands, not shell commands.
+
+    SET name "Alice"
+    GET name
+    exit
+
+STEP 6. Stop the running container.
+
+    docker stop my-redis
+
+STEP 7. Start the same stopped container again.
+
+    docker start my-redis
+
+STEP 8. Delete the container. It must be stopped first, or use -f to force.
+
+    docker stop my-redis
+    docker rm my-redis
+
+STEP 9. Delete the Redis image from the local machine.
+
+    docker rmi redis
+
+----------------------------------------
+PART B: Build a custom image from a Dockerfile and push to Docker Hub
+----------------------------------------
+
+STEP 1. Create the project folder and move into it, Windows with Git Bash.
+        In Git Bash a Windows path is written /c/... and not C:\...
+        Quote the path if it contains spaces.
+
+    mkdir -p /c/DockerProjects/Redis
+    cd /c/DockerProjects/Redis
+
+STEP 2. Same thing on Mac or Linux.
+
+    mkdir -p ~/DockerProjects/Redis
+    cd ~/DockerProjects/Redis
+
+STEP 3. Create a file named exactly Dockerfile, with NO file extension, in
+        that folder. Full content of the file:
+
+    FROM redis:latest
+    CMD ["redis-server"]
+
+        To create it from the terminal instead of an editor:
+
+    nano Dockerfile
+
+STEP 4. Build an image called redisnew from the Dockerfile in the current
+        folder. The trailing dot is the build context and is required.
+
+    docker build -t redisnew .
+
+STEP 5. Run a background container named myredisnew from the new image.
+
+    docker run --name myredisnew -d redisnew
+
+STEP 6. Confirm the container is running.
+
+    docker ps
+
+STEP 7. Stop that container.
+
+    docker stop myredisnew
+
+STEP 8. Log in to Docker Hub so an image can be pushed.
+
+    docker login
+
+STEP 9. List ALL containers including stopped ones, to read the container ID
+        needed by the next command.
+
+    docker ps -a
+
+STEP 10. Save the stopped container as a new image tagged under your Docker
+         Hub account. Replace the two placeholders with real values.
+
+    docker commit <container-id> <dockerhub-username>/redis1
+
+STEP 11. List local images to confirm the new image exists.
+
+    docker images
+
+STEP 12. Upload the image to Docker Hub.
+
+    docker push <dockerhub-username>/redis1
+
+STEP 13. Remove the container and the image from the local machine.
+
+    docker rm <container-id>
+    docker rmi <dockerhub-username>/redis1
+
+STEP 14. Log out of Docker Hub.
+
+    docker logout
+
+STEP 15. Pull the image back down from Docker Hub to prove it is stored there.
+
+    docker pull <dockerhub-username>/redis1
+
+STEP 16. Run a container named myredis from the pulled image.
+
+    docker run --name myredis -d <dockerhub-username>/redis1
+
+STEP 17. Open the Redis CLI inside it.
+
+    docker exec -it myredis redis-cli
+
+         Then inside the redis-cli prompt, set and read a key, then leave.
+
+    SET name "Abcdef"
+    GET name
+    exit
+
+STEP 18. Full cleanup: list containers, stop, remove, list images, remove
+         image.
+
+    docker ps -a
+    docker stop myredis
+    docker rm <container-id>
+    docker images
+    docker rmi <dockerhub-username>/redis1
+
+
+========================================
+SECTION 2: DOCKER COMPOSE MULTI CONTAINER
+========================================
+
+----------------------------------------
+PART A: Two services, web (nginx) and db (postgres)
+----------------------------------------
+
+STEP 1. Create the lab folder and move into it.
+
+    mkdir -p /c/DockerProjects/compose-lab
+    cd /c/DockerProjects/compose-lab
+
+STEP 2. Create a file named docker-compose.yml in that folder.
+        Full content of docker-compose.yml for Part A:
+
+    version: "3.9"
+    services:
+      web:
+        image: nginx:latest
+        ports:
+          - "8080:80"
+
+      db:
+        image: postgres:15
+        environment:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo_db
+
+STEP 3. Start the whole stack in the background.
+
+    docker compose up -d
+
+STEP 4. Open the browser at this address. The nginx welcome page should load.
+
+    http://localhost:8080
+
+----------------------------------------
+PART B: Add a Redis cache and a dependency
+----------------------------------------
+
+STEP 1. Replace docker-compose.yml so it holds three services. The
+        depends_on line makes web wait for redis to start first.
+        Full content of docker-compose.yml for Part B:
+
+    version: "3.9"
+    services:
+      web:
+        image: nginx:latest
+        ports:
+          - "8080:80"
+        depends_on:
+          - redis
+
+      db:
+        image: postgres:15
+        environment:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo_db
+
+      redis:
+        image: redis:alpine
+
+STEP 2. Recreate the stack with the new file, then list the services and
+        their state.
+
+    docker compose up -d
+    docker compose ps
+
+----------------------------------------
+PART C: Run the same stack on another machine
+----------------------------------------
+
+STEP 1. Zip the whole compose-lab folder and copy it to any other machine
+        that has Docker Compose installed. No code change is needed.
+
+STEP 2. On that second machine, from inside the copied folder, start it.
+
+    docker compose up -d
+
+----------------------------------------
+PART D: Custom network and persistent volume
+----------------------------------------
+
+STEP 1. Replace docker-compose.yml with this version. The named volume
+        db-data keeps the postgres data alive across restarts, and app-net
+        is a private network for the two services.
+        Full content of docker-compose.yml for Part D:
+
+    version: "3.9"
+
+    networks:
+      app-net:
+
+    volumes:
+      db-data:
+
+    services:
+      web:
+        image: nginx:latest
+        ports:
+          - "8080:80"
+        networks:
+          - app-net
+        depends_on:
+          - db
+
+      db:
+        image: postgres:15
+        environment:
+          POSTGRES_USER: demo
+          POSTGRES_PASSWORD: demo
+          POSTGRES_DB: demo_db
+        volumes:
+          - db-data:/var/lib/postgresql/data
+        networks:
+          - app-net
+
+STEP 2. Start the stack, bring it fully down, then start it again. The
+        database contents survive because of the named volume.
+
+    docker compose up -d
+    docker compose down
+    docker compose up -d
+
+STEP 3. Optional checks: list the networks and volumes Compose created.
+
+    docker network ls
+    docker volume ls
+
+----------------------------------------
+PART E: Build your own image inside Compose (Flask app)
+----------------------------------------
+
+STEP 1. Create a file named app.py in the same folder.
+        Full content of app.py:
+
+    from flask import Flask
+    app = Flask(__name__)
+
+    @app.route("/")
+    def home():
+        return "Hello from Flask + Docker!"
+
+    if __name__ == "__main__":
+        app.run(host="0.0.0.0", port=5000)
+
+STEP 2. Create a file named Dockerfile in the same folder.
+        Full content of Dockerfile:
+
+    FROM python:3.10-slim
+    WORKDIR /app
+    COPY app.py /app/
+    RUN pip install flask
+    CMD ["python", "app.py"]
+
+STEP 3. Optional: if the examiner wants a requirements.txt instead of the
+        inline pip install, create requirements.txt with this content:
+
+    flask
+
+        and change the Dockerfile to this version:
+
+    FROM python:3.10-slim
+    WORKDIR /app
+    COPY requirements.txt /app/
+    RUN pip install -r requirements.txt
+    COPY app.py /app/
+    CMD ["python", "app.py"]
+
+STEP 4. Point the web service at the local build instead of a pulled image.
+        Edit the web block of docker-compose.yml to read:
+
+      web:
+        build: .
+        ports:
+          - "5000:5000"
+        depends_on:
+          - db
+
+STEP 5. Build the image and start the stack in the foreground so the build
+        log is visible.
+
+    docker compose up --build
+
+STEP 6. Open the Flask app in the browser.
+
+    http://localhost:5000
+
+STEP 7. Change the return text inside app.py, then rebuild to see the new
+        message. This proves the image is rebuilt from your source.
+
+    docker compose up --build
+
+----------------------------------------
+REFERENCE COMMANDS FOR COMPOSE
+----------------------------------------
+
+NOTE. Start the stack detached.
+
+    docker compose up -d
+
+NOTE. Stop and remove the stack, its containers and its default network.
+
+    docker compose down
+
+NOTE. Run two copies of one service (horizontal scaling).
+
+    docker compose up --scale <service-name>=2 -d
+
+NOTE. List the services of the current stack.
+
+    docker compose ps
+
+NOTE. Follow the combined logs of the stack.
+
+    docker compose logs -f
+
+NOTE. The older hyphenated form still works on older Docker installs.
+
+    docker-compose up -d
+
+
+========================================
+SECTION 3: NAGIOS MONITORING IN DOCKER
+========================================
+
+STEP 1. Download the Nagios image from Docker Hub.
+
+    docker pull jasonrivers/nagios:latest
+
+STEP 2. Run Nagios in the foreground, mapping host port 8888 to container
+        port 80. The left number is the host port, the right number is the
+        port Nagios listens on INSIDE the container.
+
+    docker run --name nagiosdemo -p 8888:80 jasonrivers/nagios:latest
+
+STEP 3. Better version: run it detached so the terminal stays usable.
+
+    docker run -d --name nagiosdemo -p 8888:80 jasonrivers/nagios:latest
+
+STEP 4. Confirm it is up.
+
+    docker ps
+
+STEP 5. Open the Nagios web interface in the browser.
+
+    http://localhost:8888
+
+STEP 6. Log in with the image default credentials.
+
+    Username: nagiosadmin
+    Password: nagios
+
+STEP 7. Explore from the left menu, this is what the examiner asks to see:
+        Hosts, Services, Alerts. On a host page check Host Status (UP or
+        DOWN), the CPU, memory and network metrics, and the actions to
+        reschedule checks or schedule downtime.
+
+STEP 8. Read the container log if the page does not load.
+
+    docker logs nagiosdemo
+
+STEP 9. Cleanup: stop the container, remove it, list images, remove image.
+
+    docker stop nagiosdemo
+    docker rm nagiosdemo
+    docker images
+    docker rmi jasonrivers/nagios:latest
+
+
+========================================
+SECTION 4: KUBERNETES WITH MINIKUBE
+========================================
+
+----------------------------------------
+PART A: Install Minikube on Windows
+----------------------------------------
+
+STEP 1. Open PowerShell or Command Prompt AS ADMINISTRATOR and download the
+        installer into the current folder.
+
+    curl -LO https://storage.googleapis.com/minikube/releases/latest/minikube-installer.exe
+
+STEP 2. Run the downloaded installer.
+
+    .\minikube-installer.exe
+
+STEP 3. If minikube is not recognised afterwards, add its folder, usually
+        C:\Program Files\Minikube, to the Windows PATH environment variable,
+        then open a NEW terminal so the change is picked up.
+
+STEP 4. Confirm minikube and kubectl are installed.
+
+    minikube version
+    kubectl version --client
+
+----------------------------------------
+PART B: Start the cluster
+----------------------------------------
+
+STEP 1. Start Minikube using Docker Desktop as the driver. This is the
+        easiest option on Windows. Docker Desktop must already be open.
+
+    minikube start --driver=docker
+
+STEP 2. Alternative driver, Hyper-V, on Windows Pro or Enterprise only.
+
+    minikube start --driver=hyperv
+
+STEP 3. Check the cluster is healthy.
+
+    minikube status
+
+STEP 4. If kubectl was never installed separately, use the one bundled with
+        minikube. Everything after the double dash is passed to kubectl.
+
+    minikube kubectl -- get pods -A
+
+STEP 5. If the cluster refuses to start, read the logs and check for updates.
+
+    minikube logs
+    minikube update-check
+
+----------------------------------------
+PART C: Deploy, scale and expose Nginx
+----------------------------------------
+
+STEP 1. Create a deployment named mynginx from the nginx image.
+
+    kubectl create deployment mynginx --image=nginx
+
+STEP 2. If the deployment already exists, update its image instead of
+        creating it again.
+
+    kubectl set image deployment/mynginx nginx=nginx:latest
+
+STEP 3. Verify the deployment and its pods, and read the pod detail.
+
+    kubectl get deployments
+    kubectl get pods
+    kubectl describe pods
+
+STEP 4. Expose the deployment as a NodePort service so it is reachable from
+        outside the cluster.
+
+    kubectl expose deployment mynginx --type=NodePort --port=80 --target-port=80
+
+STEP 5. Scale to 4 replicas, then confirm the pods and the service.
+        Careful with the spelling: the name is mynginx, not myngnix.
+
+    kubectl scale deployment mynginx --replicas=4
+    kubectl get pods
+    kubectl get service mynginx
+
+STEP 6. Forward a local port to the service, then open the browser. Leave
+        this command running, it blocks the terminal.
+
+    kubectl port-forward svc/mynginx 8091:80
+
+        Then open:
+
+    http://localhost:8091
+
+STEP 7. If port forwarding fails, use the Minikube tunnel in one terminal
+        and ask for the service URL in another.
+
+    minikube tunnel
+    minikube service mynginx --url
+
+STEP 8. Open the graphical Kubernetes dashboard in the browser.
+
+    minikube dashboard
+
+----------------------------------------
+PART D: Clean up Kubernetes
+----------------------------------------
+
+STEP 1. Delete the deployment and the service.
+
+    kubectl delete deployment mynginx
+    kubectl delete service mynginx
+
+STEP 2. Stop the cluster, keeping it for next time, or delete it entirely.
+
+    minikube stop
+    minikube delete
+
+
+========================================
+SECTION 5: AWS EC2 DEPLOYMENT
+========================================
+
+----------------------------------------
+PART A: Launch the Ubuntu instance
+----------------------------------------
+
+STEP 1. In the AWS console go to Services, EC2, Launch instance. Enter
+        exactly these settings:
+
+    Name:                 ubuntu
+    AMI:                  Ubuntu Server (free tier eligible)
+    Architecture:         64-bit
+    Instance type:        t2.micro (1 vCPU, 1 GB RAM)
+    Key pair:             create new, download the .pem file into a folder
+                          named AWS
+    Network settings / Security group inbound rules:
+        Allow SSH   (port 22)
+        Allow HTTP  (port 80)
+        Allow HTTPS (port 443)
+        Add Custom TCP rule, port 6060, source Anywhere-IPv4
+    Storage:              8 GB
+    Number of instances:  1
+
+STEP 2. Select the running instance, click Connect, open the SSH client tab
+        and copy the ssh -i command that AWS shows there.
+
+STEP 3. Open Git Bash, move into the folder holding the .pem key file, then
+        paste the command. Use the /c/... path form in Git Bash, and quote
+        any path that contains spaces.
+
+    cd /c/Users/<you>/Desktop/AWS
+    ssh -i "mykey.pem" ubuntu@<public-dns-of-instance>
+
+STEP 4. If SSH refuses the key as too open, on Linux or macOS, tighten the
+        permissions first.
+
+    chmod 400 mykey.pem
+
+----------------------------------------
+PART B: Install software on the instance
+----------------------------------------
+
+STEP 1. Refresh the package lists.
+
+    sudo apt update
+
+STEP 2. Install Docker, Git and the nano editor. The -y skips the prompts.
+        The command is lowercase sudo, not Sudo.
+
+    sudo apt-get install -y docker.io
+    sudo apt install -y git
+    sudo apt install -y nano
+
+STEP 3. Allow the ubuntu user to run docker without sudo. After this, type
+        exit and SSH back in for the group change to take effect. Until then,
+        prefix every docker command with sudo.
+
+    sudo usermod -aG docker $USER
+    exit
+
+STEP 4. Confirm Docker works after reconnecting.
+
+    docker --version
+    docker ps
+
+----------------------------------------
+PART C: Get the code and write the Dockerfile
+----------------------------------------
+
+STEP 1. Clone the project from GitHub and enter the cloned folder.
+
+    git clone <github link of your maven-web-java project>
+    cd <project-folder>
+
+STEP 2. Open nano to create the Dockerfile.
+
+    nano Dockerfile
+
+STEP 3. Dockerfile for a Maven web application that produces a WAR file.
+        Full content:
+
+    # Use an official Java runtime as a parent image
+    FROM tomcat:9-jdk11
+
+    # Copy the built WAR file to the Tomcat webapps directory
+    COPY **/*.war /usr/local/tomcat/webapps/
+
+    # Tomcat already exposes 8080 and starts catalina.sh by default
+    # EXPOSE 8080
+    # CMD ["catalina.sh", "run"]
+
+STEP 4. Alternative Dockerfile if you are serving a plain static site
+        instead of a WAR. Full content:
+
+    FROM nginx:alpine
+    COPY ./ /usr/share/nginx/html/
+
+STEP 5. Save and exit nano: press Ctrl+O, then Enter, then Ctrl+X.
+
+----------------------------------------
+PART D: Build, run and access the app
+----------------------------------------
+
+STEP 1. Build the image from the current folder. The trailing dot is
+        required.
+
+    docker build -t <imagename> .
+
+STEP 2. List images to confirm the build succeeded.
+
+    docker images
+
+STEP 3. Run the container in the background. Host port 6060 is mapped to the
+        port the app listens on INSIDE the container. Tomcat listens on 8080.
+
+    docker run -d --name app-demo -p 6060:8080 <imagename>
+
+STEP 4. If the image is the nginx static one instead, nginx listens on 80
+        inside the container, so the mapping changes.
+
+    docker run -d --name app-demo -p 6060:80 <imagename>
+
+STEP 5. Open the app in the browser using the instance public IP.
+
+    http://<ec2-public-ip>:6060/
+
+STEP 6. If the page does not load, check the container is alive and read its
+        log.
+
+    docker ps
+    docker logs app-demo
+
+STEP 7. If it is still unreachable, go back to the EC2 security group and
+        add an inbound rule: Custom TCP, port 6060, source Anywhere-IPv4.
+
+STEP 8. Cleanup on the instance when finished.
+
+    docker stop app-demo
+    docker rm app-demo
+    docker images
+    docker rmi <imagename>
+
+
+========================================
+SECTION 6: JENKINS SCRIPTED PIPELINE
+========================================
+
+STEP 1. Open Jenkins and create the job.
+
+    http://localhost:8081
+
+        Then: Dashboard, New Item, enter a name, choose Pipeline, click OK.
+
+STEP 2. Fill the General section with these field values:
+
+    Description:    <description of the project>
+    Build Triggers: tick what you need, for example
+        GitHub hook trigger for GITScm polling   (build on every push)
+        Build periodically  or  Poll SCM         (cron style, for example
+                                                  H 18 * * * for 6 PM daily)
+
+STEP 3. In the Pipeline section set Definition to "Pipeline script" and
+        paste the Groovy script below into the Script box.
+        FULL GROOVY SCRIPT, Windows agent version using bat:
+
+    pipeline {
+        agent any
+        tools {
+            maven 'MAVEN-HOME'
+        }
+        stages {
+            stage('git repo & clean') {
+                steps {
+                    // bat "rmdir /s /q mavenjava"
+                    bat "git clone <your github repo link>"
+                    bat "mvn clean -f mavenjava"
+                }
+            }
+            stage('install') {
+                steps {
+                    bat "mvn install -f mavenjava"
+                }
+            }
+            stage('test') {
+                steps {
+                    bat "mvn test -f mavenjava"
+                }
+            }
+            stage('package') {
+                steps {
+                    bat "mvn package -f mavenjava"
+                }
+            }
+        }
+    }
+
+STEP 4. FULL GROOVY SCRIPT, Linux or macOS agent version using sh. Use this
+        one if the Jenkins workspace path looks like /var/lib/jenkins/...
+        Every bat is replaced by sh, nothing else changes.
+
+    pipeline {
+        agent any
+        tools {
+            maven 'MAVEN-HOME'
+        }
+        stages {
+            stage('git repo & clean') {
+                steps {
+                    // sh "rm -rf mavenjava"
+                    sh "git clone <your github repo link>"
+                    sh "mvn clean -f mavenjava"
+                }
+            }
+            stage('install') {
+                steps {
+                    sh "mvn install -f mavenjava"
+                }
+            }
+            stage('test') {
+                steps {
+                    sh "mvn test -f mavenjava"
+                }
+            }
+            stage('package') {
+                steps {
+                    sh "mvn package -f mavenjava"
+                }
+            }
+        }
+    }
+
+STEP 5. Two things that break this script, check both before running:
+        a) The tool name 'MAVEN-HOME' must match the Maven installation name
+           configured under Manage Jenkins, Tools. If it does not match, the
+           pipeline fails before the first stage runs.
+        b) mavenjava is the folder name git clone creates. If your repo is
+           named differently, change it in every stage. See the MAVEN -f FLAG
+           section at the end of this file.
+
+STEP 6. Click Apply, then Save, then Build Now, then open Console Output to
+        read the result stage by stage.
+
+STEP 7. Useful: if a rerun fails because the clone folder already exists,
+        uncomment the delete line at the top of the first stage, Windows:
+
+    bat "rmdir /s /q mavenjava"
+
+        or Linux:
+
+    sh "rm -rf mavenjava"
+
+
+========================================
+SECTION 7: JENKINS FREESTYLE JOBS AND BUILD PIPELINE VIEW
+========================================
+
+There are no shell commands in this section. The whole task is Jenkins UI
+configuration. Each block below lists the exact field values to type.
+
+----------------------------------------
+PART A: Maven Java pipeline (Build then Test)
+----------------------------------------
+
+STEP 1. Open Jenkins and click New Item.
+
+    http://localhost:8081
+
+STEP 2. Create a Freestyle project named MavenJava_Build and set these
+        fields:
+
+    Description: Java Build demo
+    Source Code Management: Git
+        Repository URL:     <your MavenJava GitHub repo URL>
+        Branches to build:  */main      (or */master, match your repo)
+    Build Step 1: Invoke top-level Maven targets
+        Maven Version: MAVEN_HOME
+        Goals:         clean
+    Build Step 2: Invoke top-level Maven targets
+        Maven Version: MAVEN_HOME
+        Goals:         install
+    Post-build Action 1: Archive the artifacts
+        Files to archive:   **/*
+    Post-build Action 2: Build other projects
+        Projects to build:  MavenJava_Test
+        Trigger only if build is stable
+
+STEP 3. Click Apply, then Save.
+
+STEP 4. Create a Freestyle project named MavenJava_Test and set these
+        fields:
+
+    Description: Test demo
+    Build Environment: Delete workspace before build starts   [checked]
+    Build Step 1: Copy artifacts from another project
+        Project name:   MavenJava_Build
+        Which build:    Latest successful build (Stable build only) [checked]
+        Artifacts to copy: **/*
+    Build Step 2: Invoke top-level Maven targets
+        Maven Version: MAVEN_HOME
+        Goals:         test
+    Post-build Action: Archive the artifacts
+        Files to archive: **/*
+
+STEP 5. Click Apply, then Save.
+
+STEP 6. Create the pipeline view: on the dashboard click the "+" beside the
+        "All" tab, and set:
+
+    View name: MavenJava_Pipeline
+    Type:      Build Pipeline View
+    Pipeline Flow:
+        Layout:             Based on upstream/downstream relationship
+        Select Initial Job: MavenJava_Build
+
+STEP 7. Click Apply, then Save, then click Run on the view. A green pipeline
+        means MavenJava_Build succeeded and automatically triggered
+        MavenJava_Test. Open each job's Console Output to confirm.
+
+----------------------------------------
+PART B: Maven Web pipeline (Build, Test, Deploy to Tomcat)
+----------------------------------------
+
+STEP 1. Create a Freestyle project named MavenWeb_Build and set these
+        fields:
+
+    Description: Web Build demo
+    Source Code Management: Git
+        Repository URL:     <your MavenWeb GitHub repo URL>
+        Branches to build:  */main      (or */master)
+    Build Step 1: Invoke top-level Maven targets
+        Maven Version: MAVEN_HOME
+        Goals:         clean
+    Build Step 2: Invoke top-level Maven targets
+        Maven Version: MAVEN_HOME
+        Goals:         install
+    Post-build Action 1: Archive the artifacts
+        Files to archive:   **/*
+    Post-build Action 2: Build other projects
+        Projects to build:  MavenWeb_Test
+        Trigger only if build is stable
+
+STEP 2. Create a Freestyle project named MavenWeb_Test and set these
+        fields:
+
+    Description: Test demo
+    Build Environment: Delete workspace before build starts   [checked]
+    Build Step 1: Copy artifacts from another project
+        Project name:      MavenWeb_Build
+        Which build:       Stable build only  [checked]
+        Artifacts to copy: **/*
+    Build Step 2: Invoke top-level Maven targets
+        Maven Version: MAVEN_HOME
+        Goals:         test
+    Post-build Action 1: Archive the artifacts
+        Files to archive:  **/*
+    Post-build Action 2: Build other projects
+        Projects to build: MavenWeb_Deploy
+
+STEP 3. Create a Freestyle project named MavenWeb_Deploy and set these
+        fields. Note the Tomcat URL is plain http, not https, unless you
+        configured SSL yourself.
+
+    Description: Web Code Deployment
+    Build Environment: Delete workspace before build starts   [checked]
+    Build Step: Copy artifacts from another project
+        Project name:      MavenWeb_Test
+        Which build:       Stable build only  [checked]
+        Artifacts to copy: **/*
+    Post-build Action: Deploy war/ear to a container
+        WAR/EAR files:  **/*.war
+        Context path:   Webpath
+        Add Container:  Tomcat 9.x Remote
+            Credentials: admin / 1234   (use your own Tomcat manager
+                                         credentials)
+            Tomcat URL:  http://localhost:8085/
+
+STEP 4. Create the pipeline view for the web chain:
+
+    View name: MavenWeb_Pipeline
+    Type:      Build Pipeline View
+    Pipeline Flow:
+        Layout:             Based on upstream/downstream relationship
+        Select Initial Job: MavenWeb_Build
+
+STEP 5. Click Apply, then Save, then click Run. When all three jobs are
+        green, open the Tomcat home page, go to Manager App, and click the
+        /Webpath context to see the deployed application.
+
+    http://localhost:8085
+    http://localhost:8085/manager/html
+    http://localhost:8085/Webpath
+
+
+========================================
+SECTION 8: JENKINS WEBHOOKS AND EMAIL NOTIFICATION
+========================================
+
+----------------------------------------
+PART A: Expose local Jenkins to the internet with ngrok
+----------------------------------------
+
+STEP 1. Download ngrok from the official site and extract the zip.
+
+    https://ngrok.com/download
+
+STEP 2. Confirm ngrok is on PATH. If this fails, cd into the folder you
+        extracted and run ngrok.exe from there instead.
+
+    ngrok version
+
+STEP 3. Register the auth token copied from your ngrok dashboard. This is
+        done once per machine.
+
+    ngrok config add-authtoken <your_token>
+
+STEP 4. Open a tunnel to the local Jenkins port. Leave this terminal open,
+        closing it kills the tunnel and the URL changes next time.
+
+    ngrok http 8081
+
+STEP 5. Copy the HTTPS forwarding URL that ngrok prints, for example
+        https://<something>.ngrok-free.dev
+        That is now the public address of your local Jenkins.
+
+----------------------------------------
+PART B: Add the webhook in GitHub
+----------------------------------------
+
+STEP 1. Go to the GitHub repository, Settings, Webhooks, Add webhook, and
+        fill these values. The trailing /github-webhook/ is required and
+        there must be no space before it.
+
+    Payload URL:  https://<your-ngrok-subdomain>.ngrok-free.dev/github-webhook/
+    Content type: application/json
+    Events:       Just the push event
+    Active:       checked
+
+STEP 2. Click Add webhook. A green tick beside it means GitHub reached
+        Jenkins. Use Recent Deliveries to re-send and debug.
+
+----------------------------------------
+PART C: Enable the trigger in Jenkins
+----------------------------------------
+
+STEP 1. Jenkins dashboard, open the job, freestyle or pipeline, click
+        Configure.
+
+STEP 2. In the Build Triggers section tick this exact option, then Save.
+
+    GitHub hook trigger for GITScm polling
+
+STEP 3. Test it: push any commit to the repo and Jenkins should start a
+        build on its own within a few seconds.
+
+    git add .
+    git commit -m "test webhook"
+    git push origin main
+
+----------------------------------------
+PART D: Email notification on build result
+----------------------------------------
+
+STEP 1. Install the plugin: Manage Jenkins, Plugins, Available plugins,
+        install "Email Extension Plugin", then restart Jenkins if asked.
+
+STEP 2. Go to Manage Jenkins, System, and find the E-mail Notification
+        section near the bottom. Fill these values. The password is a 16
+        digit Gmail app password, not your normal Gmail password.
+
+    SMTP server:       smtp.gmail.com
+    Use SMTP Auth:     checked
+    User Name:         <your Gmail address>
+    Password:          <16 digit app password>
+    Use SSL:           checked
+    SMTP Port:         465
+    Reply-To Address:  <your Gmail address>
+
+STEP 3. Click "Test configuration by sending test e-mail", enter an address
+        and confirm the mail arrives.
+
+STEP 4. Still in Manage Jenkins, System, find the Extended E-mail
+        Notification section and fill these values.
+
+    SMTP server:           smtp.gmail.com
+    SMTP Port:             465
+    Use SSL:               checked
+    Credentials:           Gmail address plus app password, added as Jenkins
+                           credentials
+    Default Content Type:  text/html
+    Default Recipients:    <leave empty or set defaults>
+    Default Triggers:      Failure, Success as needed
+
+STEP 5. Open the job, Configure, Post-build Actions, Add post-build action,
+        Editable Email Notification, and fill these values.
+
+    Project Recipient List: <comma separated addresses>
+    Content Type:           Default (text/plain) or text/html
+    Triggers:               Failure, Success
+
+STEP 6. Click Save, run a build, and confirm the mail arrives.
+
+
+========================================
+COMMON ERRORS AND FIXES
+========================================
+These are the real errors hit during the practice session, with the fix that
+worked.
+
+----------------------------------------
+ERROR 1: Docker Desktop not running
+----------------------------------------
+ERROR TEXT:
+    error during connect ... dockerDesktopLinuxEngine: The system cannot
+    find the file specified
+
+CAUSE AND FIX:
+    The Docker Desktop application is not open. Docker commands talk to the
+    Docker Desktop engine, so nothing works until it is running.
+    Open Docker Desktop from the Start menu and wait until the bottom left
+    corner says "Engine running", then re-run the command.
+
+----------------------------------------
+ERROR 2: The word docker typed twice
+----------------------------------------
+ERROR TEXT:
+    unknown shorthand flag: 'i' in -it
+
+CAUSE AND FIX:
+    The word docker was typed twice, for example
+    docker exec docker -it my-redis redis-cli, so docker treated -it as a
+    flag of the wrong command.
+    The correct form is:
+
+    docker exec -it my-redis redis-cli
+
+----------------------------------------
+ERROR 3: Container name already taken
+----------------------------------------
+ERROR TEXT:
+    Conflict. The container name "/my-redis" is already in use by container
+    ...
+
+CAUSE AND FIX:
+    A container with that name already exists, running or stopped. Either
+    delete it and run again, or just start the existing one.
+    Delete and re-run:
+
+    docker rm -f my-redis
+
+        then re-run your original docker run command. Or reuse it:
+
+    docker start my-redis
+
+----------------------------------------
+ERROR 4: Git Bash cd with spaces in the path
+----------------------------------------
+ERROR TEXT:
+    bash: cd: too many arguments
+
+CAUSE AND FIX:
+    The path contains spaces, so bash read it as several arguments. Wrap the
+    whole path in double quotes and use forward slashes with the /c/ prefix.
+
+    cd "/c/Users/Dell/Downloads/Folder Name"
+
+----------------------------------------
+ERROR 5: Maven rejects Java source level 7
+----------------------------------------
+ERROR TEXT:
+    Source option 7 is no longer supported. Use 8 or later.
+
+CAUSE AND FIX:
+    The project pom.xml still asks for Java 7, which modern JDKs refuse.
+    Edit pom.xml and change maven.compiler.source and maven.compiler.target
+    from 7 to 8. If the project configures the compiler plugin directly
+    instead, change the source and target values inside
+    maven-compiler-plugin from 7 to 8.
+    Properties form:
+
+    <properties>
+        <maven.compiler.source>8</maven.compiler.source>
+        <maven.compiler.target>8</maven.compiler.target>
+    </properties>
+
+        Plugin form:
+
+    <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <configuration>
+            <source>8</source>
+            <target>8</target>
+        </configuration>
+    </plugin>
+
+----------------------------------------
+ERROR 6: Jenkins bat step on a Linux agent
+----------------------------------------
+ERROR TEXT:
+    java.io.IOException: Batch scripts can only be run on Windows nodes
+
+CAUSE AND FIX:
+    The Jenkins agent is Linux, which you can confirm from the workspace
+    path in the console output looking like /var/lib/jenkins/...
+    The bat step only exists on Windows nodes. Replace every bat with sh in
+    the pipeline script. Example:
+
+    sh "mvn install -f mavenjava"
+
+        The full Linux version of the pipeline is in SECTION 6, STEP 4.
+
+----------------------------------------
+ERROR 7: Docker socket permission denied on EC2
+----------------------------------------
+ERROR TEXT:
+    permission denied while trying to connect to the docker API at
+    unix:///var/run/docker.sock
+
+CAUSE AND FIX:
+    The ubuntu user is not in the docker group yet. Either prefix every
+    command with sudo, for example sudo docker ps, or add yourself to the
+    group once and reconnect.
+
+    sudo usermod -aG docker $USER
+
+        then type exit, and SSH back into the instance. The group membership
+        only applies to a new login session.
+
+----------------------------------------
+ERROR 8: ngrok not recognised
+----------------------------------------
+ERROR TEXT:
+    'ngrok' is not recognized as an internal or external command
+
+CAUSE AND FIX:
+    ngrok.exe is not on the Windows PATH. Two options.
+    Option A, cd into the folder where you extracted it and call the exe
+    directly:
+
+    cd /c/Users/Dell/Downloads/ngrok
+    ./ngrok.exe http 8081
+
+    Option B, add that folder to the Windows PATH environment variable, then
+    open a NEW terminal so the change is loaded, and run:
+
+    ngrok http 8081
+
+----------------------------------------
+ERROR 9: Browser cannot reach the app on EC2
+----------------------------------------
+SYMPTOM:
+    http://<ec2-public-ip>:6060/ times out or refuses to connect, even
+    though docker ps shows the container running.
+
+CAUSE AND FIX, there are two separate causes, check both:
+    Cause 1, the security group has no inbound rule for that port. In the
+    AWS console open the instance, Security tab, click the security group,
+    Edit inbound rules, Add rule: Type Custom TCP, Port range 6060, Source
+    Anywhere-IPv4, then Save rules.
+
+    Cause 2, the right-hand side of the -p mapping does not match the port
+    the app actually listens on INSIDE the container. nginx listens on 80,
+    Tomcat listens on 8080.
+    Tomcat image:
+
+    docker run -d --name app-demo -p 6060:8080 <imagename>
+
+        nginx image:
+
+    docker run -d --name app-demo -p 6060:80 <imagename>
+
+----------------------------------------
+ERROR 10: Port already in use on Windows
+----------------------------------------
+ERROR TEXT:
+    Ports are not available ... bind: Only one usage of each socket address
+    is normally permitted
+    or: port is already allocated
+
+CAUSE AND FIX:
+    Another program already holds that port. Find out which process, then
+    pick a different free port. Replace PORT with the number.
+
+    netstat -ano | findstr :PORT
+
+        The last column is the process ID. Look it up in Task Manager,
+        Details tab, PID column. Then either stop that program or change
+        your host port, for example use 8081 instead of 8080, and re-run.
+
+
+========================================
+MAVEN -f FLAG
+========================================
+The -f flag tells Maven where the pom.xml is. Getting it wrong is the most
+common reason a Jenkins Maven stage fails with "there is no POM in this
+directory".
+
+RULE 1. If pom.xml sits at the root of the repository and Jenkins is already
+        working in that folder, omit -f entirely.
+
+    mvn clean
+    mvn install
+    mvn test
+    mvn package
+
+RULE 2. If pom.xml sits inside a subfolder, pass that folder with -f. Maven
+        accepts the folder path, it finds pom.xml inside it.
+
+    mvn install -f <path-to-folder>
+
+RULE 3. After a git clone, the working directory is the folder ABOVE the
+        cloned repo, so the path must include the cloned repo folder name.
+        git clone https://github.com/you/mavenjava.git creates a folder
+        named mavenjava, so the path starts with mavenjava.
+
+    mvn clean -f mavenjava
+    mvn install -f mavenjava
+    mvn test -f mavenjava
+    mvn package -f mavenjava
+
+RULE 4. If the pom is deeper still, for example the repo is mavenjava and
+        the project lives in mavenjava/webapp, chain the folders.
+
+    mvn install -f mavenjava/webapp
+
+RULE 5. Pointing -f straight at the file also works, if you prefer being
+        explicit.
+
+    mvn install -f mavenjava/pom.xml
+
+CHECK IT FIRST. Before guessing, list the workspace in the pipeline to see
+                the real layout. Linux agent:
+
+    sh "ls -R"
+
+                Windows agent:
+
+    bat "dir /s /b pom.xml"
+
+
+================================================================================
+END OF FILE
+================================================================================
